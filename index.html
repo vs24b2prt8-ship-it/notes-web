@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>就活ノート</title>
+<meta name="theme-color" content="#1F4E78">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="就活ノート">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#faf9f8;color:#3e3a39;font-family:'Noto Sans JP',system-ui,sans-serif;
+  font-weight:300;line-height:1.7;-webkit-text-size-adjust:100%}
+#wrap{padding:20px 16px 40px}
+h1{font-size:20px;font-weight:400;letter-spacing:.04em;margin-bottom:4px}
+h1 span{color:#f19db5}
+.sub{font-size:12px;color:#8c8887;margin-bottom:20px}
+a.card,button.card{display:block;width:100%;text-align:left;background:#fff;border:1px solid #e5e5e5;
+  border-radius:10px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:inherit;
+  font:inherit;cursor:pointer}
+a.card:active,button.card:active{background:#f3f2f1}
+.t{font-size:16px;font-weight:400;margin-bottom:3px}
+.m{font-size:12px;color:#8c8887;line-height:1.6}
+.d{font-size:11px;color:#b0acab;margin-top:6px;font-variant-numeric:tabular-nums}
+.miss{color:#c62828}
+
+/* パスフレーズ入力 */
+#gate{max-width:420px;margin:0 auto;padding-top:8vh}
+#gate p{font-size:12px;color:#8c8887;margin-bottom:14px;line-height:1.9}
+#pass{width:100%;padding:12px 14px;font-size:16px;border:1px solid #e5e5e5;border-radius:8px;
+  background:#fff;color:inherit}
+#go{margin-top:10px;width:100%;padding:12px;font-size:14px;border:0;border-radius:8px;
+  background:#f19db5;color:#fff;cursor:pointer}
+#gate-msg{margin-top:12px;font-size:12px;color:#c62828;min-height:1.2em}
+
+/* ノート表示 */
+#note{display:none;position:fixed;inset:0;background:#fff;flex-direction:column}
+#note.open{display:flex}
+#bar{background:#f19db5;padding:9px 14px;display:flex;align-items:center;gap:12px;flex:none}
+#bar button{background:none;border:0;color:#fff;font:400 14px/1 'Noto Sans JP',sans-serif;cursor:pointer}
+#bar .ttl{color:#fff;font-size:13px;opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#frame{flex:1;width:100%;border:0}
+
+.foot{margin-top:22px;font-size:11px;color:#b0acab;line-height:1.9}
+.foot button{background:none;border:0;color:#b0acab;text-decoration:underline;font:inherit;cursor:pointer;padding:0}
+
+@media(prefers-color-scheme:dark){
+  body{background:#16151a;color:#eceaf0}
+  a.card,button.card{background:#1e1d24;border-color:#36343f}
+  a.card:active,button.card:active{background:#26252e}
+  .sub,.m,#gate p{color:#9b97a5}.d,.foot{color:#6f6b78}
+  #pass{background:#1e1d24;border-color:#36343f;color:#eceaf0}
+  #note{background:#16151a}
+  .foot button{color:#6f6b78}
+}
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <div id="gate">
+    <h1>就活<span>ノート</span></h1>
+    <p>PCが起動していなくても読めるように、暗号化した状態で置いてあります。<br>
+      パスフレーズを入れると、この端末の中だけで復号します。</p>
+    <input id="pass" type="password" placeholder="パスフレーズ" autocomplete="current-password">
+    <button id="go">開く</button>
+    <div id="gate-msg"></div>
+  </div>
+
+  <div id="list" style="display:none">
+    <h1>就活<span>ノート</span></h1>
+    <div class="sub" id="built"></div>
+    <div id="cards"></div>
+    <div class="foot">
+      この端末に保存されているのはパスフレーズだけです。<br>
+      <button id="forget">パスフレーズを消す</button>
+    </div>
+  </div>
+</div>
+
+<div id="note">
+  <div id="bar">
+    <button id="back">&larr; ノート一覧</button>
+    <span class="ttl" id="note-title"></span>
+  </div>
+  <iframe id="frame"></iframe>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const PASS_KEY = "notesweb_pass";
+
+let meta = null;     // data/index.json
+let cryptoKey = null;
+let listing = [];
+
+const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function deriveKey(pass) {
+  const base = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64d(meta.salt), iterations: meta.iterations, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+}
+
+async function decrypt(blob) {
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64d(blob.iv) }, cryptoKey, b64d(blob.ct));
+  return new TextDecoder().decode(pt);
+}
+
+async function loadMeta() {
+  // 端末のHTTPキャッシュで古い版を掴まないように毎回時刻を付ける
+  const r = await fetch("data/index.json?t=" + Date.now(), { cache: "no-store" });
+  if (!r.ok) throw new Error("配信データが見つかりません");
+  meta = await r.json();
+}
+
+async function unlock(pass) {
+  cryptoKey = await deriveKey(pass);
+  listing = JSON.parse(await decrypt(meta.list));   // 復号できた＝パスフレーズが正しい
+}
+
+function showList() {
+  $("gate").style.display = "none";
+  $("list").style.display = "";
+  $("built").textContent = "最終更新 " + meta.built + "（PCが押し出した時点）";
+  const cards = $("cards");
+  cards.innerHTML = "";
+  listing.forEach(n => {
+    const b = document.createElement("button");
+    b.className = "card";
+    b.innerHTML = "";
+    const t = document.createElement("div"); t.className = "t"; t.textContent = n.label;
+    const m = document.createElement("div"); m.className = "m"; m.textContent = n.memo || "";
+    const d = document.createElement("div"); d.className = "d"; d.textContent = "更新 " + n.mtime;
+    b.append(t, m, d);
+    b.onclick = () => openNote(n);
+    cards.appendChild(b);
+  });
+}
+
+async function openNote(n) {
+  $("note-title").textContent = n.label;
+  $("note").classList.add("open");
+  const f = $("frame");
+  f.srcdoc = "<!doctype html><meta charset=utf-8><p style='font:300 13px sans-serif;padding:20px'>復号しています…";
+  try {
+    const r = await fetch("data/" + encodeURIComponent(n.key) + ".json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("見つかりません");
+    f.srcdoc = await decrypt(await r.json());
+  } catch (e) {
+    f.srcdoc = "<!doctype html><meta charset=utf-8><p style='font:300 13px sans-serif;padding:20px'>"
+      + "開けませんでした: " + String(e.message || e);
+  }
+}
+
+// ノート内の ?n=xxx リンク（ダッシュボードから各ノートへ飛ぶ等）を拾って中で切り替える
+$("frame").addEventListener("load", () => {
+  let doc;
+  try { doc = $("frame").contentDocument; } catch (e) { return; }
+  if (!doc) return;
+  doc.addEventListener("click", ev => {
+    const a = ev.target.closest && ev.target.closest("a[href]");
+    if (!a) return;
+    // サーバー版のリンク(?n=xxx / ?)は静的配信では飛べないので、外側で切り替える
+    const href = a.getAttribute("href") || "";
+    if (href.charAt(0) !== "?") return;
+    ev.preventDefault();
+    const m = /[?&]n=([^&#]+)/.exec(href);
+    const hit = m && listing.find(x => x.key === decodeURIComponent(m[1]));
+    if (hit) openNote(hit); else closeNote();
+  });
+});
+
+function closeNote() {
+  $("note").classList.remove("open");
+  $("frame").srcdoc = "";
+}
+$("back").onclick = closeNote;
+
+$("go").onclick = async () => {
+  const p = $("pass").value;
+  if (!p) return;
+  $("gate-msg").textContent = "";
+  $("go").disabled = true;
+  $("go").textContent = "復号しています…";
+  try {
+    await unlock(p);
+    localStorage.setItem(PASS_KEY, p);
+    showList();
+  } catch (e) {
+    $("gate-msg").textContent = "パスフレーズが違うようです";
+  } finally {
+    $("go").disabled = false;
+    $("go").textContent = "開く";
+  }
+};
+$("pass").addEventListener("keydown", e => { if (e.key === "Enter") $("go").click(); });
+
+$("forget").onclick = () => {
+  localStorage.removeItem(PASS_KEY);
+  location.reload();
+};
+
+(async () => {
+  try {
+    await loadMeta();
+  } catch (e) {
+    $("gate-msg").textContent = String(e.message || e);
+    return;
+  }
+  const saved = localStorage.getItem(PASS_KEY);
+  if (!saved) return;
+  try {
+    await unlock(saved);
+    showList();
+  } catch (e) {
+    localStorage.removeItem(PASS_KEY);
+    $("gate-msg").textContent = "保存されていたパスフレーズでは開けませんでした";
+  }
+})();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js", { scope: "./" }).catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
