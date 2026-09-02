@@ -1,0 +1,25 @@
+{
+  "name": "ど真ん中を射抜くまで",
+  "short_name": "射抜くまで",
+  "description": "ソニーミュージックグループ本選考までの地図。現在地・次の一手・今日の行動。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#141A24",
+  "theme_color": "#141A24",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
